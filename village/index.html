@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My AI Village</title>
+<style>
+  body { margin: 0; background: #9fc5e8; font-family: sans-serif; }
+  canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  footer { text-align: center; padding: 12px; font-size: 16px; }
+  footer a { color: #000; }
+</style>
+</head>
+<body>
+<canvas id="village" width="1200" height="750"></canvas>
+<footer>Made with <a href="https://garystow.co.uk/articles/how-to-build-a-live-village-dashboard-for-your-ai-agents/">Village Starter by Gary Stow</a></footer>
+<script>
+const TW = 64, TH = 32;                 // one tile: 64 wide, 32 tall
+
+function toScreen(x, y) {               // grid square -> pixel position
+  return { sx: (x - y) * TW / 2, sy: (x + y) * TH / 2 };
+}
+
+function tile(ctx, x, y, colour) {
+  const { sx, sy } = toScreen(x, y);
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(sx + TW / 2, sy + TH / 2);
+  ctx.lineTo(sx, sy + TH);
+  ctx.lineTo(sx - TW / 2, sy + TH / 2);
+  ctx.closePath();
+  ctx.fillStyle = colour;
+  ctx.fill();
+}
+
+function poly(ctx, pts, fill) {
+  ctx.beginPath();
+  pts.forEach(([px, py], i) => i ? ctx.lineTo(px, py) : ctx.moveTo(px, py));
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "#000";
+  ctx.stroke();
+}
+
+function shade(hex, pct) {              // lighten or darken a colour
+  const n = parseInt(hex.slice(1), 16);
+  const f = c => Math.max(0, Math.min(255, c + Math.round(2.55 * pct)));
+  return "#" + [f(n >> 16), f((n >> 8) & 255), f(n & 255)]
+    .map(v => v.toString(16).padStart(2, "0")).join("");
+}
+
+function box(ctx, x, y, h, colour) {    // h = height in pixels
+  const { sx, sy } = toScreen(x, y);
+  const top = sy - h;
+  poly(ctx, [[sx - TW/2, top + TH/2], [sx, top + TH], [sx, sy + TH], [sx - TW/2, sy + TH/2]], shade(colour, -25));
+  poly(ctx, [[sx, top + TH], [sx + TW/2, top + TH/2], [sx + TW/2, sy + TH/2], [sx, sy + TH]], shade(colour, -10));
+  poly(ctx, [[sx, top], [sx + TW/2, top + TH/2], [sx, top + TH], [sx - TW/2, top + TH/2]], colour);
+}
+
+const walkers = [];
+
+function playEvent(ev) {                // ev.from and ev.at are building names
+  walkers.push({ from: BUILDINGS[ev.from], to: BUILDINGS[ev.at], t: 0 });
+}
+
+function moveWalkers(dt) {              // dt = milliseconds since last frame
+  for (const w of walkers) w.t = Math.min(1, w.t + dt / 4000);  // 4 seconds a trip
+  for (let i = walkers.length - 1; i >= 0; i--) {
+    if (walkers[i].t >= 1) walkers.splice(i, 1);
+  }
+}
+
+function walkerPos(w) {
+  return { x: w.from.x + (w.to.x - w.from.x) * w.t,
+           y: w.from.y + (w.to.y - w.from.y) * w.t };
+}
+
+function fieldScale(net) {              // net = profit or loss in pounds
+  return Math.max(0.6, Math.min(1.45, 1 + net / 400));
+}
+
+function houseFloors(views) {
+  return views > 200 ? 3 : views > 50 ? 2 : 1;
+}
+
+// ---- your own buildings: change names, places, colours and heights ----
+const BUILDINGS = {
+  hall:     {x: 4, y: 4, c: "#e8c547", h: 50, name: "Town Hall"},
+  workshop: {x: 9, y: 2, c: "#6fa8dc", h: 36, name: "Writers"},
+  site:     {x: 2, y: 9, c: "#93c47d", h: 30, name: "Website"},
+  field:    {x: 9, y: 9, c: "#b6d7a8", h: 6,  name: "Strategy field"}
+};
+
+function drawGround() {
+  for (let x = 0; x < 13; x++) for (let y = 0; y < 13; y++)
+    tile(ctx, x, y, (x === 6 || y === 6) ? "#c9b48a" : "#7cb860");
+}
+
+function label(text, x, y) {
+  ctx.font = "bold 16px sans-serif";
+  const w = ctx.measureText(text).width + 16;
+  ctx.fillStyle = "#fff"; ctx.fillRect(x - w / 2, y - 14, w, 26);
+  ctx.lineWidth = 2; ctx.strokeStyle = "#000"; ctx.strokeRect(x - w / 2, y - 14, w, 26);
+  ctx.fillStyle = "#000"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(text, x, y);
+}
+
+function drawBuildings() {
+  Object.values(BUILDINGS).sort((a, b) => (a.x + a.y) - (b.x + b.y)).forEach(B => {
+    const isField = B === BUILDINGS.field;
+    const h = isField ? B.h * fieldScale(DATA.fields.strategy_a || 0)
+                      : B.h * houseFloors(DATA.pages[0] ? DATA.pages[0].views : 0);
+    box(ctx, B.x, B.y, h, B.c);
+    const { sx, sy } = toScreen(B.x, B.y);
+    label(B.name, sx, sy - h - 12);
+  });
+}
+
+function drawWalkers() {
+  for (const w of walkers) {
+    const p = walkerPos(w), { sx, sy } = toScreen(p.x, p.y);
+    ctx.beginPath(); ctx.arc(sx, sy + TH / 2 - 10, 8, 0, Math.PI * 2);
+    ctx.fillStyle = "#e06666"; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = "#000"; ctx.stroke();
+  }
+}
+
+// replay the events: one person sets off every 0.7 seconds, then start again
+function replay() {
+  if (!DATA) return;
+  DATA.events.forEach((ev, i) => setTimeout(() => playEvent(ev), i * 700));
+  setTimeout(replay, Math.max(4000, DATA.events.length * 700 + 4000));
+}
+setTimeout(replay, 500);
+const canvas = document.getElementById("village");
+const ctx = canvas.getContext("2d");
+let DATA = null, last = performance.now();
+
+function frame(now) {
+  const dt = now - last;
+  last = now;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(1, 0, 0, 1, canvas.width / 2, 80);  // grid square 0,0 sits top centre
+  drawGround();
+  drawBuildings();
+  moveWalkers(dt);
+  drawWalkers();
+  requestAnimationFrame(frame);
+}
+
+fetch("village_data.json")
+  .then(r => r.json())
+  .then(d => { DATA = d; requestAnimationFrame(frame); });
+
+</script>
+</body>
+</html>

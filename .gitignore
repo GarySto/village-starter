@@ -1,0 +1,5 @@
+activity_log.jsonl
+village/village_data.json
+public/
+__pycache__/
+publish_starter.ps1
